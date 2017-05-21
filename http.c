@@ -2576,6 +2576,7 @@ evhttp_connection_new_(struct event_base *base, struct bufferevent* bev)
 		 * can start sending requests on.
 		 */
 		evcon->state = EVCON_IDLE;
+		evcon->flags |= EVHTTP_CON_OUTGOING;
 	}
 
 	return (evcon);
