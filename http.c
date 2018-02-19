@@ -3161,11 +3161,6 @@ void
 evhttp_send_reply_start(struct evhttp_request *req, int code,
     const char *reason)
 {
-	// https://github.com/libevent/libevent/issues/509
-	if (req->evcon == NULL) {
-		return;
-	}
-
 	evhttp_response_code_(req, code, reason);
 
 	if (req->evcon == NULL)
