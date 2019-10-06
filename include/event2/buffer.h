@@ -939,6 +939,14 @@ EVENT2_EXPORT_SYMBOL
 int evbuffer_remove_cb_entry(struct evbuffer *buffer,
 			     struct evbuffer_cb_entry *ent);
 
+/** Remove all callbacks from an evbuffer, given the function used to add it.
+
+    @return 0 if any callback was removed, or -1 if no matching callback was
+    found.
+ */
+EVENT2_EXPORT_SYMBOL
+int evbuffer_remove_all_cb(struct evbuffer *buffer, evbuffer_cb_func cb);
+
 /** Remove a callback from an evbuffer, given the function and argument
     used to add it.
 
