@@ -192,6 +192,7 @@ evthread_use_pthreads_with_flags(int flags)
 	if (flags & EVTHREAD_PTHREAD_PRIO_INHERIT) {
 #ifdef EVENT__HAVE_PTHREAD_MUTEXATTR_SETPROTOCOL
 		/* Set up priority inheritance */
+        /*
 		if (pthread_mutexattr_setprotocol(&attr_default, PTHREAD_PRIO_INHERIT))
 			return -1;
 		if (pthread_mutexattr_setprotocol(&attr_recursive, PTHREAD_PRIO_INHERIT))
