@@ -4656,7 +4656,7 @@ evhttp_associate_new_request_with_connection(struct evhttp_connection *evcon)
 	return (0);
 }
 
-void
+struct evhttp_connection*
 evhttp_get_request(struct evhttp *http, evutil_socket_t fd,
     struct sockaddr *sa, ev_socklen_t salen)
 {
@@ -4667,7 +4667,7 @@ evhttp_get_request(struct evhttp *http, evutil_socket_t fd,
 		event_sock_warn(fd, "%s: cannot get connection on "EV_SOCK_FMT,
 		    __func__, EV_SOCK_ARG(fd));
 		evutil_closesocket(fd);
-		return;
+		return NULL;
 	}
 
 	/* the timeout can be used by the server to close idle connections */
@@ -4691,7 +4691,7 @@ evhttp_get_request(struct evhttp *http, evutil_socket_t fd,
 
 		if ((req = evhttp_request_new(evhttp_handle_request, http)) == NULL) {
 			evhttp_connection_free(evcon);
-			return;
+			return NULL;
 		}
 
 		req->evcon = evcon;	/* the request owns the connection */
@@ -4708,6 +4708,7 @@ evhttp_get_request(struct evhttp *http, evutil_socket_t fd,
 
 	} else if (evhttp_associate_new_request_with_connection(evcon) == -1)
 		evhttp_connection_free(evcon);
+	return evcon;
 }
 
 
