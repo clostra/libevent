@@ -2640,7 +2640,6 @@ struct bufferevent* evhttp_connection_detach_bufferevent(struct evhttp_connectio
 {
     struct bufferevent *bev = evcon->bufev;
     evcon->bufev = bufferevent_socket_new(evcon->base, -1, 0);
-    evcon->fd = -1;
     evcon->state = EVCON_DISCONNECTED;
     return bev;
 }
