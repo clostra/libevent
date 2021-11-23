@@ -476,6 +476,13 @@ bufferevent_connect_getaddrinfo_cb(int result, struct evutil_addrinfo *ai,
 		return;
 	}
 
+        // found this called with ai == NULL
+        if (!ai) {
+            bufferevent_run_eventcb_(bev, BEV_EVENT_ERROR, 0);
+            bufferevent_decref_and_unlock_(bev);
+            return;
+        }
+
 	/* XXX use the other addrinfos? */
 	bufferevent_socket_set_conn_address_(bev, ai->ai_addr, (int)ai->ai_addrlen);
 	r = bufferevent_socket_connect(bev, ai->ai_addr, (int)ai->ai_addrlen);
