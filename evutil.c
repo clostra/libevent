@@ -1839,29 +1839,6 @@ evutil_dupe_addrinfo_(struct evutil_addrinfo *ai)
     return first;
 }
 
-struct evutil_addrinfo *
-evutil_dupe_addrinfo_(struct evutil_addrinfo *ai)
-{
-    struct evutil_addrinfo *first = NULL;
-    struct evutil_addrinfo *prev = NULL;
-    for (; ai; ai = ai->ai_next) {
-        int len = sizeof(struct evutil_addrinfo) + ai->ai_addrlen;
-        struct evutil_addrinfo *n = mm_calloc(1, len);
-        memcpy(n, ai, len);
-        if (ai->ai_canonname) {
-            n->ai_canonname = mm_strdup(ai->ai_canonname);
-        }
-        n->ai_addr = (struct sockaddr*)(((char*)n) + sizeof(struct evutil_addrinfo));
-        if (!first) {
-            first = n;
-        } else {
-            prev->ai_next = n;
-        }
-        prev = n;
-    }
-    return first;
-}
-
 static evdns_getaddrinfo_fn evdns_getaddrinfo_impl = NULL;
 static evdns_getaddrinfo_cancel_fn evdns_getaddrinfo_cancel_impl = NULL;
 
