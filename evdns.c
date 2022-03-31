@@ -5406,6 +5406,7 @@ evdns_cache_write(struct evdns_base *dns_base, char *nodename, struct evutil_add
 		timerclear(&tv);
 		tv.tv_sec = ttl;
 		evtimer_add(&cache->ev_timeout, &tv);
+	}
 	EVDNS_UNLOCK(dns_base);
 }
 
