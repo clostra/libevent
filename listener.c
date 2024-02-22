@@ -24,16 +24,19 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#ifdef _WIN32
+#ifndef _WIN32_WINNT
+/* Minimum required for InitializeCriticalSectionAndSpinCount */
+#define _WIN32_WINNT 0x0403
+#endif
+#endif
+
 #include "event2/event-config.h"
 #include "evconfig-private.h"
 
 #include <sys/types.h>
 
 #ifdef _WIN32
-#ifndef _WIN32_WINNT
-/* Minimum required for InitializeCriticalSectionAndSpinCount */
-#define _WIN32_WINNT 0x0403
-#endif
 #include <winsock2.h>
 #include <winerror.h>
 #include <ws2tcpip.h>
@@ -217,7 +220,6 @@ evconnlistener_new_bind(struct event_base *base, evconnlistener_cb cb,
 {
 	struct evconnlistener *listener;
 	evutil_socket_t fd;
-	int on = 1;
 	int family = sa ? sa->sa_family : AF_UNSPEC;
 	int socktype = SOCK_STREAM | EVUTIL_SOCK_NONBLOCK;
 	int support_keepalive = 1;
@@ -240,7 +242,8 @@ evconnlistener_new_bind(struct event_base *base, evconnlistener_cb cb,
 	}
 #endif
 	if (support_keepalive) {
-		if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, (void*)&on, sizeof(on))<0)
+		/* TODO(panjf2000): make this TCP keep-alive value configurable */
+		if (evutil_set_tcp_keepalive(fd, 1, 300) < 0)
 			goto err;
 	}
 
@@ -264,6 +267,11 @@ evconnlistener_new_bind(struct event_base *base, evconnlistener_cb cb,
 			goto err;
 	}
 
+	if (flags & LEV_OPT_BIND_IPV4_AND_IPV6) {
+		if (evutil_make_listen_socket_not_ipv6only(fd) < 0)
+			goto err;
+	}
+
 	if (sa) {
 		if (bind(fd, sa, socklen)<0)
 			goto err;
@@ -275,8 +283,13 @@ evconnlistener_new_bind(struct event_base *base, evconnlistener_cb cb,
 
 	return listener;
 err:
-	evutil_closesocket(fd);
-	return NULL;
+	{
+		int saved_errno = EVUTIL_SOCKET_ERROR();
+		evutil_closesocket(fd);
+		if (saved_errno)
+			EVUTIL_SET_SOCKET_ERROR(saved_errno);
+		return NULL;
+	}
 }
 
 void
@@ -898,8 +911,11 @@ evconnlistener_new_async(struct event_base *base,
 	return &lev->base;
 
 err_free_accepting:
+	for (i = 0; i < lev->n_accepting; ++i) {
+		if (lev->accepting[i])
+			free_and_unlock_accepting_socket(lev->accepting[i]);
+	}
 	mm_free(lev->accepting);
-	/* XXXX free the other elements. */
 err_delete_lock:
 	EVTHREAD_FREE_LOCK(lev->base.lock, EVTHREAD_LOCKTYPE_RECURSIVE);
 err_free_lev:

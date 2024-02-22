@@ -14,7 +14,7 @@
 *.exe
 *.lib
 
-# Patch leaves these lying arround
+# Patch leaves these lying around
 *.orig
 *.rej
 
@@ -104,6 +104,7 @@ time-test
 event-test
 watch-timing
 becat
+ws-chat-server
 
 # test binaries
 test-driver
@@ -133,6 +134,7 @@ evconfig-private.h
 CMakeCache.txt
 CMakeFiles/
 CTestTestfile.cmake
+CTestCostData.txt
 DartConfiguration.tcl
 LibeventConfig.cmake
 LibeventConfigVersion.cmake
@@ -140,6 +142,7 @@ LibeventTargets*.cmake
 bin/
 cmake_install.cmake
 Uninstall.cmake
+compile_commands.json
 lib/
 tmp/
 verify_tests.sh
@@ -162,6 +165,17 @@ rules.ninja
 # make dist
 /COPYING
 /INSTALL
-/*.tar.gz
+*.tar.gz
 
 /.vagrant
+
+# clangd
+.cache
+
+# Project files from IDE or editors
+
+# VS/VSCode
+.vs/
+.vscode/
+# IntelliJ/Clion
+.idea/
