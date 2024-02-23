@@ -24,6 +24,14 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#ifdef _WIN32
+#ifndef _WIN32_WINNT
+/* For structs needed by GetAdaptersAddresses and AI_NUMERICSERV */
+#define _WIN32_WINNT 0x0600
+#endif
+#define WIN32_LEAN_AND_MEAN
+#endif
+
 #include "event2/event-config.h"
 #include "evconfig-private.h"
 
@@ -34,15 +42,10 @@
 #ifdef EVENT__HAVE_AFUNIX_H
 #include <afunix.h>
 #endif
-#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#undef WIN32_LEAN_AND_MEAN
 #include <io.h>
 #include <tchar.h>
 #include <process.h>
-#undef _WIN32_WINNT
-/* For structs needed by GetAdaptersAddresses */
-#define _WIN32_WINNT 0x0501
 #include <iphlpapi.h>
 #include <netioapi.h>
 #endif
@@ -212,14 +215,14 @@ evutil_read_file_(const char *filename, char **content_out, size_t *len_out,
 #ifdef _WIN32
 
 static int
-create_tmpfile(char tmpfile[MAX_PATH])
+create_tmpfile(WCHAR tmpfile[MAX_PATH])
 {
-	char short_path[MAX_PATH] = {0};
-	char long_path[MAX_PATH] = {0};
-	char prefix[4] = {0};
-	// GetTempFileNameA() uses up to the first three characters of the prefix
+	WCHAR short_path[MAX_PATH] = {0};
+	WCHAR long_path[MAX_PATH] = {0};
+	WCHAR prefix[4] = {0};
+	// GetTempFileNameW() uses up to the first three characters of the prefix
 	// and windows filesystems are case-insensitive
-	const char *base32set = "abcdefghijklmnopqrstuvwxyz012345";
+	const WCHAR *base32set = L"abcdefghijklmnopqrstuvwxyz012345";
 	ev_uint16_t rnd;
 
 	evutil_secure_rng_get_bytes(&rnd, sizeof(rnd));
@@ -228,9 +231,9 @@ create_tmpfile(char tmpfile[MAX_PATH])
 	prefix[2] = base32set[(rnd >> 10) & 31];
 	prefix[3] = '\0';
 
-	GetTempPathA(MAX_PATH, short_path);
-	GetLongPathNameA(short_path, long_path, MAX_PATH);
-	if (!GetTempFileNameA(long_path, prefix, 0, tmpfile)) {
+	GetTempPathW(MAX_PATH, short_path);
+	GetLongPathNameW(short_path, long_path, MAX_PATH);
+	if (!GetTempFileNameW(long_path, prefix, 0, tmpfile)) {
 		event_warnx("GetTempFileName failed: %d", EVUTIL_SOCKET_ERROR());
 		return -1;
 	}
@@ -264,6 +267,7 @@ static int
 evutil_win_socketpair_afunix(int family, int type, int protocol,
     evutil_socket_t fd[2])
 {
+#undef ERR
 #define ERR(e) WSA##e
 	evutil_socket_t listener = -1;
 	evutil_socket_t connector = -1;
@@ -271,7 +275,8 @@ evutil_win_socketpair_afunix(int family, int type, int protocol,
 
 	struct sockaddr_un listen_addr;
 	struct sockaddr_un connect_addr;
-	char tmp_file[MAX_PATH] = {0};
+	WCHAR tmp_file[MAX_PATH] = {0};
+	char tmp_file_utf8[MAX_PATH] = {0};
 
 	ev_socklen_t size;
 	int saved_errno = -1;
@@ -289,9 +294,14 @@ evutil_win_socketpair_afunix(int family, int type, int protocol,
 	if (create_tmpfile(tmp_file)) {
 		goto tidy_up_and_fail;
 	}
-	DeleteFileA(tmp_file);
+	DeleteFileW(tmp_file);
+
+	/* Windows requires `sun_path` to be encoded by UTF-8 */
+	WideCharToMultiByte(
+		CP_UTF8, 0, tmp_file, MAX_PATH, tmp_file_utf8, MAX_PATH, NULL, NULL);
+
 	listen_addr.sun_family = AF_UNIX;
-	if (strlcpy(listen_addr.sun_path, tmp_file, UNIX_PATH_MAX) >=
+	if (strlcpy(listen_addr.sun_path, tmp_file_utf8, UNIX_PATH_MAX) >=
 		UNIX_PATH_MAX) {
 		event_warnx("Temp file name is too long");
 		goto tidy_up_and_fail;
@@ -352,7 +362,7 @@ evutil_win_socketpair_afunix(int family, int type, int protocol,
 	if (acceptor != -1)
 		evutil_closesocket(acceptor);
 	if (tmp_file[0])
-		DeleteFileA(tmp_file);
+		DeleteFileW(tmp_file);
 
 	EVUTIL_SET_SOCKET_ERROR(saved_errno);
 	return -1;
@@ -396,10 +406,12 @@ evutil_win_socketpair(int family, int type, int protocol,
 int
 evutil_socketpair(int family, int type, int protocol, evutil_socket_t fd[2])
 {
-#ifndef _WIN32
+#if defined(_WIN32)
+	return evutil_win_socketpair(family, type, protocol, fd);
+#elif defined(EVENT__HAVE_SOCKETPAIR)
 	return socketpair(family, type, protocol, fd);
 #else
-	return evutil_win_socketpair(family, type, protocol, fd);
+	return evutil_ersatz_socketpair_(family, type, protocol, fd);
 #endif
 }
 
@@ -414,6 +426,7 @@ evutil_ersatz_socketpair_(int family, int type, int protocol,
 	 * for now, and really, when localhost is down sometimes, we
 	 * have other problems too.
 	 */
+#undef ERR
 #ifdef _WIN32
 #define ERR(e) WSA##e
 #else
@@ -427,7 +440,7 @@ evutil_ersatz_socketpair_(int family, int type, int protocol,
 	ev_socklen_t size;
 	int saved_errno = -1;
 	int family_test;
-	
+
 	family_test = family != AF_INET;
 #ifdef AF_UNIX
 	family_test = family_test && (family != AF_UNIX);
@@ -436,7 +449,7 @@ evutil_ersatz_socketpair_(int family, int type, int protocol,
 		EVUTIL_SET_SOCKET_ERROR(ERR(EAFNOSUPPORT));
 		return -1;
 	}
-	
+
 	if (!fd) {
 		EVUTIL_SET_SOCKET_ERROR(ERR(EINVAL));
 		return -1;
@@ -597,15 +610,26 @@ evutil_make_listen_socket_ipv6only(evutil_socket_t sock)
 }
 
 int
+evutil_make_listen_socket_not_ipv6only(evutil_socket_t sock)
+{
+#if defined(IPV6_V6ONLY)
+	int zero = 0;
+	return setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, (void *)&zero,
+		(ev_socklen_t)sizeof(zero));
+#endif
+	return 0;
+}
+
+int
 evutil_make_tcp_listen_socket_deferred(evutil_socket_t sock)
 {
 #if defined(EVENT__HAVE_NETINET_TCP_H) && defined(TCP_DEFER_ACCEPT)
 	int one = 1;
 
 	/* TCP_DEFER_ACCEPT tells the kernel to call defer accept() only after data
-	 * has arrived and ready to read */ 
+	 * has arrived and ready to read */
 	return setsockopt(sock, IPPROTO_TCP, TCP_DEFER_ACCEPT, &one,
-		(ev_socklen_t)sizeof(one)); 
+		(ev_socklen_t)sizeof(one));
 #endif
 	return 0;
 }
@@ -1855,6 +1879,23 @@ evutil_set_evdns_getaddrinfo_cancel_fn_(evdns_getaddrinfo_cancel_fn fn)
 		evdns_getaddrinfo_cancel_impl = fn;
 }
 
+static const char *evutil_custom_resolvconf_filename = NULL;
+
+void
+evutil_set_resolvconf_filename_(const char *filename)
+{
+	evutil_custom_resolvconf_filename = filename;
+}
+
+const char *
+evutil_resolvconf_filename_(void)
+{
+	if (evutil_custom_resolvconf_filename)
+		return evutil_custom_resolvconf_filename;
+
+	return "/etc/resolv.conf";
+}
+
 /* Internal helper function: act like evdns_getaddrinfo if dns_base is set;
  * otherwise do a blocking resolve and pass the result to the callback in the
  * way that evdns_getaddrinfo would.
@@ -2264,11 +2305,14 @@ evutil_inet_pton_scope(int af, const char *src, void *dst, unsigned *indexp)
 			return 0;
 	}
 	*indexp = if_index;
-	tmp_src = mm_strdup(src);
+	if (!(tmp_src = mm_strdup(src))) {
+		return -1;
+	}
 	cp = strchr(tmp_src, '%');
+	// The check had been already done above against original src
 	*cp = '\0';
 	r = evutil_inet_pton(af, tmp_src, dst);
-	free(tmp_src);
+	mm_free(tmp_src);
 	return r;
 }
 
@@ -3011,4 +3055,140 @@ evutil_free_globals_(void)
 {
 	evutil_free_secure_rng_globals_();
 	evutil_free_sock_err_globals();
+}
+
+int
+evutil_set_tcp_keepalive(evutil_socket_t fd, int on, int timeout)
+{
+	int idle;
+	int intvl;
+	int cnt;
+
+	/* Prevent compiler from complaining unused variables warnings. */
+	(void) idle;
+	(void) intvl;
+	(void) cnt;
+
+	if (timeout <= 0)
+		return 0;
+
+	if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof(on)))
+		return -1;
+	if (!on)
+		return 0;
+
+	/* Unlike Unix-like OS's, TCP keep-alive mechanism on Windows is kind of a mess,
+	 * setting TCP_KEEPIDLE, TCP_KEEPINTVL and TCP_KEEPCNT on Windows could be a bit tricky.
+	 * Check out https://learn.microsoft.com/en-us/windows/win32/winsock/sio-keepalive-vals,
+	 * https://learn.microsoft.com/en-us/windows/win32/winsock/ipproto-tcp-socket-options.
+	 * These three options are not available until Windows 10, version 1709 where we set them
+	 * by `setsockopt` (slightly different from Unix-like OS's pattern), while on older Windows,
+	 * we have to use `WSAIoctl` instead.
+	 * Therefore, we skip setting those three options on Windows for now.
+	 * TODO(panjf2000): enable the full TCP keep-alive mechanism on Windows when we find a feasible way to do it.
+	 */
+#ifndef _WIN32
+
+#ifdef __sun
+	/* The implementation of TCP keep-alive on Solaris/SmartOS is a bit unusual
+	 * compared to other Unix-like systems.
+	 * Thus, we need to specialize it on Solaris.
+	 *
+	 * There are two keep-alive mechanisms on Solaris:
+	 * - By default, the first keep-alive probe is sent out after a TCP connection is idle for two hours.
+	 * If the peer does not respond to the probe within eight minutes, the TCP connection is aborted.
+	 * You can alter the interval for sending out the first probe using the socket option TCP_KEEPALIVE_THRESHOLD
+	 * in milliseconds or TCP_KEEPIDLE in seconds.
+	 * The system default is controlled by the TCP ndd parameter tcp_keepalive_interval. The minimum value is ten seconds.
+	 * The maximum is ten days, while the default is two hours. If you receive no response to the probe,
+	 * you can use the TCP_KEEPALIVE_ABORT_THRESHOLD socket option to change the time threshold for aborting a TCP connection.
+	 * The option value is an unsigned integer in milliseconds. The value zero indicates that TCP should never time out and
+	 * abort the connection when probing. The system default is controlled by the TCP ndd parameter tcp_keepalive_abort_interval.
+	 * The default is eight minutes.
+	 *
+	 * - The second implementation is activated if socket option TCP_KEEPINTVL and/or TCP_KEEPCNT are set.
+	 * The time between each consequent probes is set by TCP_KEEPINTVL in seconds.
+	 * The minimum value is ten seconds. The maximum is ten days, while the default is two hours.
+	 * The TCP connection will be aborted after certain amount of probes, which is set by TCP_KEEPCNT, without receiving response.
+	 */
+
+	idle = timeout;
+	/* Kernel expects at least 10 seconds. */
+	if (idle < 10)
+		idle = 10;
+	/* Kernel expects at most 10 days. */
+	if (idle > 10*24*60*60)
+		idle = 10*24*60*60;
+
+	/* `TCP_KEEPIDLE`, `TCP_KEEPINTVL`, and `TCP_KEEPCNT` were not available on Solaris
+	 * until version 11.4, but let's gamble here.
+	 */
+#if defined(TCP_KEEPIDLE) && defined(TCP_KEEPINTVL) && defined(TCP_KEEPCNT)
+	if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(idle)))
+		return -1;
+
+	intvl = idle/3;
+	if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &intvl, sizeof(intvl)))
+		return -1;
+
+	cnt = 3;
+	if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &cnt, sizeof(cnt)))
+		return -1;
+#else
+	/* Fall back to the first implementation of tcp-alive mechanism for older Solaris,
+	 * simulate the tcp-alive mechanism on other platforms via `TCP_KEEPALIVE_THRESHOLD` + `TCP_KEEPALIVE_ABORT_THRESHOLD`.
+	 */
+	idle *= 1000; /* kernel expects milliseconds */
+	if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPALIVE_THRESHOLD, &idle, sizeof(idle)))
+		return -1;
+
+	/* Note that the consequent probes will not be sent at equal intervals on Solaris,
+	 * but will be sent using the exponential backoff algorithm.
+	 */
+	intvl = idle/3;
+	cnt = 3;
+	int time_to_abort = intvl * cnt;
+	if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPALIVE_ABORT_THRESHOLD, &time_to_abort, sizeof(time_to_abort)))
+		return -1;
+#endif
+
+#else /* !__sun */
+
+#ifdef TCP_KEEPIDLE
+	idle = timeout;
+	if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(idle)))
+		return -1;
+#elif defined(TCP_KEEPALIVE)
+	/* Darwin/macOS uses TCP_KEEPALIVE in place of TCP_KEEPIDLE. */
+	idle = timeout;
+	if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPALIVE, &idle, sizeof(idle)))
+		return -1;
+#endif
+
+#ifdef TCP_KEEPINTVL
+	/* Set the interval between individual keep-alive probes as timeout / 3
+	 * and the maximum number of keepalive probes as 3 to make it double timeout
+	 * before aborting a dead connection.
+	 */
+	intvl = timeout/3;
+	if (intvl == 0)
+		intvl = 1;
+	if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &intvl, sizeof(intvl)))
+		return -1;
+#endif
+
+#ifdef TCP_KEEPCNT
+	/* Set the maximum number of keepalive probes as 3 to collaborate with
+	 * TCP_KEEPINTVL, see the previous comment.
+	 */
+	cnt = 3;
+	if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &cnt, sizeof(cnt)))
+		return -1;
+#endif
+
+#endif /* !__sun */
+
+#endif /* !_WIN32 */
+
+	return 0;
 }

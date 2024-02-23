@@ -6,7 +6,7 @@ dnl
 dnl Original version Dug Song <dugsong@monkey.org>
 
 AC_PREREQ([2.67])
-AC_INIT(libevent,2.2.0-alpha-dev)
+AC_INIT(libevent,2.2.1-alpha-dev)
 AC_CONFIG_SRCDIR(event.c)
 
 AC_CONFIG_MACRO_DIR([m4])
@@ -20,7 +20,8 @@ dnl make compilation quiet unless V=1 is used
 AM_SILENT_RULES([yes])
 
 AC_CONFIG_HEADERS(config.h  evconfig-private.h:evconfig-private.h.in)
-AC_DEFINE(NUMERIC_VERSION, 0x02020001, [Numeric representation of the version])
+dnl The last number is development version or not.
+AC_DEFINE(NUMERIC_VERSION, 0x02020100, [Numeric representation of the version])
 
 dnl Try and get a full POSIX environment on obscure systems
 AC_USE_SYSTEM_EXTENSIONS
@@ -42,7 +43,7 @@ AC_ARG_ENABLE([gcc-warnings],
 AC_ARG_ENABLE([gcc-hardening],
      AS_HELP_STRING([--enable-gcc-hardening, enable compiler security checks]),
 [if test "$enableval" = "yes"; then
-    CFLAGS="$CFLAGS -D_FORTIFY_SOURCE=2 -fstack-protector-all"
+    CFLAGS="$CFLAGS -D_FORTIFY_SOURCE=3 -fstack-protector-all"
     CFLAGS="$CFLAGS -fwrapv -fPIE -Wstack-protector"
     CFLAGS="$CFLAGS --param ssp-buffer-size=1"
 fi])
@@ -55,10 +56,10 @@ AC_ARG_ENABLE([malloc-replacement],
     [], [enable_malloc_replacement=yes])
 AC_ARG_ENABLE([openssl],
      AS_HELP_STRING([--disable-openssl, disable support for openssl encryption]),
-    [], [enable_openssl=yes])
+    [], [enable_openssl=auto])
 AC_ARG_ENABLE([mbedtls],
      AS_HELP_STRING([--disable-mbedtls, disable support for mbedtls encryption]),
-    [], [enable_mbedtls=yes])
+    [], [enable_mbedtls=auto])
 AC_ARG_ENABLE([debug-mode],
      AS_HELP_STRING([--disable-debug-mode, disable support for running in debug mode]),
     [], [enable_debug_mode=yes])
@@ -181,7 +182,7 @@ LIBEVENT_OPENSSL
 LIBEVENT_MBEDTLS
 
 dnl Checks for header files.
-AC_CHECK_HEADERS([arpa/inet.h fcntl.h ifaddrs.h mach/mach_time.h mach/mach.h netdb.h netinet/in.h netinet/in6.h netinet/tcp.h sys/un.h poll.h port.h stdarg.h stddef.h sys/devpoll.h sys/epoll.h sys/event.h sys/eventfd.h sys/ioctl.h sys/mman.h sys/param.h sys/queue.h sys/resource.h sys/select.h sys/sendfile.h sys/socket.h sys/stat.h sys/time.h sys/timerfd.h sys/uio.h sys/wait.h sys/random.h errno.h afunix.h])
+AC_CHECK_HEADERS([arpa/inet.h fcntl.h ifaddrs.h mach/mach_time.h mach/mach.h netdb.h netinet/in.h netinet/in6.h netinet/tcp.h sys/un.h poll.h port.h stdarg.h stddef.h sys/devpoll.h sys/epoll.h sys/event.h sys/eventfd.h sys/ioctl.h sys/mman.h sys/param.h sys/queue.h sys/resource.h sys/select.h sys/sendfile.h sys/socket.h sys/stat.h sys/time.h sys/timerfd.h sys/signalfd.h sys/uio.h sys/wait.h sys/random.h errno.h afunix.h])
 
 case "${host_os}" in
     linux*) ;;
@@ -272,7 +273,7 @@ dnl Checks for typedefs, structures, and compiler characteristics.
 AC_C_INLINE
 
 dnl Checks for library functions.
-AC_CHECK_FUNCS([accept4 arc4random arc4random_buf arc4random_addrandom eventfd epoll_create1 fcntl getegid geteuid getifaddrs gettimeofday issetugid mach_absolute_time mmap nanosleep pipe pipe2 putenv sendfile setenv setrlimit sigaction signal strsignal strlcpy strsep strtok_r strtoll sysctl timerfd_create umask unsetenv usleep getrandom ])
+AC_CHECK_FUNCS([accept4 arc4random arc4random_buf arc4random_addrandom eventfd epoll_create1 epoll_pwait2 fcntl getegid geteuid getifaddrs gettimeofday issetugid mach_absolute_time mmap nanosleep pipe pipe2 pread putenv sendfile setenv setrlimit sigaction signal strsignal strlcpy strsep strtok_r strtoll sysctl timerfd_create umask unsetenv usleep getrandom mmap64 socketpair])
 
 AS_IF([test "$bwin32" = "true"],
   AC_CHECK_FUNCS(_gmtime64_s, , [AC_CHECK_FUNCS(_gmtime64)])
@@ -280,13 +281,7 @@ AS_IF([test "$bwin32" = "true"],
 
 AM_CONDITIONAL(STRLCPY_IMPL, [test "$ac_cv_func_strlcpy" = "no"])
 
-m4_define([funcstochk],
-  [getnameinfo
-  getprotobynumber
-  getservbyname
-  inet_ntop
-  inet_pton]
-)
+m4_define([funcstochk], [getnameinfo getprotobynumber getservbyname inet_ntop inet_pton])
 
 AS_IF([test "$bwin32" = "true"],
   [AX_CHECK_DECLS_EX([funcstochk getaddrinfo],
@@ -549,6 +544,7 @@ if test "$bwin32" = "true"; then
 fi
 AM_CONDITIONAL(WEPOLL_BACKEND, [test "$havewepoll" = "yes"])
 AM_CONDITIONAL(SIGNAL_SUPPORT, [test "$needsignal" = "yes"])
+AM_CONDITIONAL(SIGNALFD_SUPPORT, [test "$ac_cv_header_sys_signalfd_h" = "yes"])
 
 AC_TYPE_PID_T
 AC_TYPE_SIZE_T
@@ -721,12 +717,6 @@ if test "$enable_verbose_debug" = "yes"; then
 	CFLAGS="$CFLAGS -DUSE_DEBUG"
 fi
 
-dnl check if we have and should use OpenSSL
-AM_CONDITIONAL(OPENSSL, [test "$enable_openssl" != "no" && test "$have_openssl" = "yes"])
-
-# check if we have and should use mbedtls
-AM_CONDITIONAL(MBEDTLS, [test "$enable_mbedtls" != "no" && test "$have_mbedtls" = "yes"])
-
 dnl enable some warnings by default
 AX_CHECK_COMPILE_FLAG([-Wall], [CFLAGS="$CFLAGS -Wall"],[],[-Werror])
 
@@ -762,23 +752,29 @@ if test "$enable_gcc_warnings" != "no" && test "$GCC" = "yes"; then
   AX_CHECK_COMPILE_FLAG([-Wwrite-strings],[CFLAGS="$CFLAGS -Wwrite-strings"],[],[-Werror])
 
   dnl Convert warnings into errors
-  if test x"$enable_gcc_warnings" = "yes"; then
+  if test "$enable_gcc_warnings" = "yes"; then
     AX_CHECK_COMPILE_FLAG([-Werror], [CFLAGS="$CFLAGS -Werror"])
   fi
 
-  dnl Disable warnings for unused paramaters
-  AX_CHECK_COMPILE_FLAG([-Wno-unused-parameter], [CFLAGS="$CFLAGS -Wno-unused-parameter"],[],[-Werror])
-  AX_CHECK_COMPILE_FLAG([-Wno-void-pointer-to-enum-cast], [CFLAGS="$CFLAGS -Wno-void-pointer-to-enum-cast"],[],[-Werror])
+  dnl Disable warnings for unused parameters
+  AX_CHECK_COMPILE_FLAG([-Wunused-parameter], [CFLAGS="$CFLAGS -Wno-unused-parameter"],[],[-Werror])
+  AX_CHECK_COMPILE_FLAG([-Wvoid-pointer-to-enum-cast], [CFLAGS="$CFLAGS -Wno-void-pointer-to-enum-cast"],[],[-Werror])
 
   AC_COMPILE_IFELSE([AC_LANG_PROGRAM([], [
   #if !defined(__clang__)
   #error
   #endif])], have_clang=yes, have_clang=no)
 
-  if test "$have_clang" = "yes"; then
-    dnl Disable unused-function warnings. These trigger for minheap-internal.h.
-    AX_CHECK_COMPILE_FLAG([-Wno-unused-function], [CFLAGS="$CFLAGS -Wno-unused-function"],[],[-Werror])
+   dnl Disable unused-function warnings. These trigger for minheap-internal.h.
+   AX_CHECK_COMPILE_FLAG([-Wno-unused-function], [CFLAGS="$CFLAGS -Wno-unused-function"],[],[-Werror])
 
+   dnl Disable unknown pragmas warnings.
+   AX_CHECK_COMPILE_FLAG([-Wno-pragmas], [CFLAGS="$CFLAGS -Wno-pragmas"],[],[-Werror])
+
+   dnl Disable Variable Lenght Array
+   AX_CHECK_COMPILE_FLAG([-Wvla], [CFLAGS="$CFLAGS -Wvla"],[],[-Werror])
+
+  if test "$have_clang" = "yes"; then
     case "$host_os" in
       darwin*)
         dnl Clang on macOS emits warnings for each directory specified which
@@ -863,6 +859,13 @@ AC_SUBST([LIBEVENT_GC_SECTIONS])
 
 AM_CONDITIONAL([INSTALL_LIBEVENT], [test "$enable_libevent_install" = "yes"])
 
+dnl Allow additional flags from a containing package such as NTP
+AC_SUBST([LIBEVENT_CFLAGS])
+AC_SUBST([LIBEVENT_CPPFLAGS])
+AC_SUBST([LIBEVENT_LDFLAGS])
+
+AC_C_BIGENDIAN([CFLAGS="$CFLAGS -DBIG_ENDIAN"], [CFLAGS="$CFLAGS -DLITTLE_ENDIAN"])
+
 dnl Doxygen support
 DX_HTML_FEATURE(ON)
 DX_MAN_FEATURE(OFF)
@@ -876,6 +879,12 @@ DX_INIT_DOXYGEN([libevent], [${top_srcdir}/Doxyfile], [doxygen])
 
 AM_CONDITIONAL([ENABLE_DOXYGEN], [test "$DX_FLAG_doc" = "1"])
 AM_CONDITIONAL([ENABLE_DOXYGEN_MAN], [test "$DX_FLAG_man" = "1"])
+
+dnl autotools uses the same pkg-config templates as cmake, and in cmake we have
+dnl CMAKE_DEBUG_POSTFIX, so define it to empty value to simply replcae it in
+dnl *.pc.in
+CMAKE_DEBUG_POSTFIX=""
+AC_SUBST([CMAKE_DEBUG_POSTFIX])
 
 AC_CONFIG_FILES([Makefile libevent.pc libevent_mbedtls.pc libevent_openssl.pc libevent_pthreads.pc libevent_core.pc libevent_extra.pc] )
 AC_OUTPUT
