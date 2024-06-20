@@ -1343,8 +1343,10 @@ evhttp_connection_free(struct evhttp_connection *evcon)
 
 	if (evcon->http_server != NULL) {
 		struct evhttp *http = evcon->http_server;
-		TAILQ_REMOVE(&http->connections, evcon, next);
-		http->connection_cnt--;
+                if (!TAILQ_EMPTY(&http->connections)) {
+		    TAILQ_REMOVE(&http->connections, evcon, next);
+		    http->connection_cnt--;
+                }
 	}
 
 	if (event_initialized(&evcon->retry_ev)) {
