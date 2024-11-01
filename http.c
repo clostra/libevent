@@ -179,6 +179,15 @@ fake_getnameinfo(const struct sockaddr *sa, size_t salen, char *host,
 #define MIN(a,b) (((a)<(b))?(a):(b))
 #endif
 
+/** The request obj owns the evhttp connection and needs to free it */
+#define EVHTTP_REQ_OWN_CONNECTION	0x0001
+/** The request object is owned by the user; the user must free it */
+#define EVHTTP_USER_OWNED		0x0004
+/** The request will be used again upstack; freeing must be deferred */
+#define EVHTTP_REQ_DEFER_FREE		0x0008
+/** The request should be freed upstack */
+#define EVHTTP_REQ_NEEDS_FREE		0x0010
+
 extern int debug;
 
 static evutil_socket_t create_bind_socket_nonblock(struct evutil_addrinfo *, int reuse);
@@ -1803,8 +1812,6 @@ evhttp_parse_request_line(struct evhttp_request *req, char *line, size_t len)
 	char *method;
 	char *uri;
 	char *version;
-	const char *hostname;
-	const char *scheme;
 	size_t method_len;
 	enum evhttp_cmd_type type = 0;
 
@@ -2048,17 +2055,6 @@ evhttp_parse_request_line(struct evhttp_request *req, char *line, size_t len)
 		}
 	}
 
-	/* If we have an absolute-URI, check to see if it is an http request
-	   for a known vhost or server alias. If we don't know about this
-	   host, we consider it a proxy request. */
-	scheme = evhttp_uri_get_scheme(req->uri_elems);
-	hostname = evhttp_uri_get_host(req->uri_elems);
-	if (scheme && (!evutil_ascii_strcasecmp(scheme, "http") ||
-		       !evutil_ascii_strcasecmp(scheme, "https")) &&
-	    hostname &&
-	    !evhttp_find_vhost(req->evcon->http_server, NULL, hostname))
-		req->flags |= EVHTTP_PROXY_REQUEST;
-
 	return 0;
 }
 
@@ -2138,7 +2134,12 @@ evhttp_add_header(struct evkeyvalq *headers,
 {
 	event_debug(("%s: key: %s val: %s\n", __func__, key, value));
 
-	if (strchr(key, '\r') != NULL || strchr(key, '\n') != NULL) {
+	/* RFC 9110 defines field-names as case-sensitive non-empty strings made of the following characters */
+	// field-name     = 1*tchar
+	// tchar          = "!" / "#" / "$" / "%" / "&" / "'" / "*" / "+" / "-" / "." / "^" / "_" / "`" / "|" / "~" / 0-9 / A-Z / a-z
+	/* For simplicity, we'll reject field-names containing the documented most dangerous characters */
+	// "Field values containing CR, LF, or NUL characters are invalid and dangerous, due to the varying ways that implementations might parse and interpret those characters; a recipient of CR, LF, or NUL within a field value MUST either reject the message or replace each of those characters with SP before further processing or forwarding of that message."
+	if (strchr(key, '\r') != NULL || strchr(key, '\n') != NULL || key[0] == '\0') {
 		/* drop illegal headers */
 		event_debug(("%s: dropping illegal header key\n", __func__));
 		return (-1);
@@ -3009,7 +3010,7 @@ evhttp_start_read_(struct evhttp_connection *evcon)
 	    evcon);
 
 	/* If there's still data pending, process it next time through the
-	 * loop.  Don't do it now; that could get recusive. */
+	 * loop.  Don't do it now; that could get recursive. */
 	if (evbuffer_get_length(bufferevent_get_input(evcon->bufev))) {
 		event_deferred_cb_schedule_(get_deferred_queue(evcon),
 		    &evcon->read_more_deferred_cb);

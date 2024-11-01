@@ -188,7 +188,7 @@ extern "C" {
 #define DNS_QUERY_NO_SEARCH 0x01
 /** Use TCP connections ("virtual circuits") for queries rather than UDP datagrams. */
 #define DNS_QUERY_USEVC 0x02
-/** Ignore trancation flag in responses (don't fallback to TCP connections). */
+/** Ignore truncation flag in responses (don't fallback to TCP connections). */
 #define DNS_QUERY_IGNTC 0x04
 /** Make a separate callback for CNAME in answer */
 #define DNS_CNAME_CALLBACK 0x80
@@ -253,6 +253,8 @@ struct event_base;
 
 /** Flag for evdns_base_new: process resolv.conf.  */
 #define EVDNS_BASE_INITIALIZE_NAMESERVERS 1
+/** Flag for evdns_base_new: disable caching of DNS responses by default
+ * for async resolver. */
 #define EVDNS_BASE_NO_CACHE 0x10
 /** Flag for evdns_base_new: Do not prevent the libevent event loop from
  * exiting when we have no active dns requests. */
@@ -286,7 +288,8 @@ struct event_base;
 
   @param event_base the event base to associate the dns client with
   @param flags any of EVDNS_BASE_INITIALIZE_NAMESERVERS|
-    EVDNS_BASE_DISABLE_WHEN_INACTIVE|EVDNS_BASE_NAMESERVERS_NO_DEFAULT
+    EVDNS_BASE_DISABLE_WHEN_INACTIVE|EVDNS_BASE_NAMESERVERS_NO_DEFAULT|
+    EVDNS_BASE_NO_CACHE
   @return evdns_base object if successful, or NULL if an error occurred.
   @see evdns_base_free()
  */
@@ -357,7 +360,7 @@ const char *evdns_err_to_string(int err);
   The address should be an IPv4 address in network byte order.
   The type of address is chosen so that it matches in_addr.s_addr.
 
-  @param base the evdns_base to which to add the name server
+  @param base the evdns_base to which to add the name server. base must not be NULL.
   @param address an IP address in network byte order
   @return 0 if successful, or -1 if an error occurred
   @see evdns_base_nameserver_ip_add()
@@ -420,7 +423,7 @@ int evdns_base_resume(struct evdns_base *base);
 
   If no port is specified, it defaults to 53.
 
-  @param base the evdns_base to which to apply this operation
+  @param base the evdns_base to which to apply this operation. base must not be NULL
   @return 0 if successful, or -1 if an error occurred
   @see evdns_base_nameserver_add()
  */
@@ -531,7 +534,7 @@ void evdns_cancel_request(struct evdns_base *base, struct evdns_request *req);
   In case of options without values (use-vc, ingore-tc) val should be an empty
   string or NULL.
 
-  @param base the evdns_base to which to apply this operation
+  @param base the evdns_base to which to apply this operation. base must not be NULL.
   @param option the name of the configuration option to be modified
   @param val the value to be set
   @return 0 if successful, or -1 if an error occurred
@@ -558,7 +561,7 @@ int evdns_base_set_option(struct evdns_base *base, const char *option, const cha
    EVDNS_ERROR_SHORT_READ_FROM_FILE (5) - short read from file
    EVDNS_ERROR_NO_NAMESERVERS_CONFIGURED (6) - no nameservers configured.
 
-  @param base the evdns_base to which to apply this operation
+  @param base the evdns_base to which to apply this operation. base must not be NULL.
   @param flags any of DNS_OPTION_NAMESERVERS|DNS_OPTION_SEARCH|DNS_OPTION_MISC|
     DNS_OPTION_HOSTSFILE|DNS_OPTIONS_ALL|DNS_OPTION_NAMESERVERS_NO_DEFAULT
   @param filename the path to the resolv.conf file
@@ -800,8 +803,9 @@ struct evdns_getaddrinfo_request;
 /** Make a non-blocking getaddrinfo request using the dns_base in 'dns_base'.
  *
  * If we can answer the request immediately (with an error or not!), then we
- * invoke cb immediately and return NULL.  Otherwise we return
- * an evdns_getaddrinfo_request and invoke cb later.
+ * invoke cb immediately and return NULL. This can happen e.g. if the
+ * requested address is in the hosts file, or cached, or invalid. Otherwise
+ * we return an evdns_getaddrinfo_request and invoke cb later.
  *
  * When the callback is invoked, we pass as its first argument the error code
  * that getaddrinfo would return (or 0 for no error).  As its second argument,
@@ -813,6 +817,12 @@ struct evdns_getaddrinfo_request;
  * - The AI_V4MAPPED and AI_ALL flags are not currently implemented.
  * - For ai_socktype, we only handle SOCKTYPE_STREAM, SOCKTYPE_UDP, and 0.
  * - For ai_protocol, we only handle IPPROTO_TCP, IPPROTO_UDP, and 0.
+ * - If we cached a response exclusively for a different address type (e.g.
+ *   PF_INET), we will set addrinfo to NULL (e.g. queried with PF_INET6)
+ * - Cache isn't hit when AI_CANONNAME is set but cached server response
+ *	 doesn't contain CNAME.
+ * - If we can answer immediately (e.g. using hosts file, there is an error
+ *   or when cache is hit), we invoke the call back and return NULL.
  */
 EVENT2_EXPORT_SYMBOL
 struct evdns_getaddrinfo_request *evdns_getaddrinfo(

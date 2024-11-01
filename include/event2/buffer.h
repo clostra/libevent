@@ -105,7 +105,7 @@ struct evbuffer
 
     Used when repeatedly searching through a buffer.  Calling any function
     that modifies or re-packs the buffer contents may invalidate all
-    evbuffer_ptrs for that buffer.  Do not modify or contruct these values
+    evbuffer_ptrs for that buffer.  Do not modify or construct these values
     except with evbuffer_ptr_set.
 
     An evbuffer_ptr can represent any position from the start of a buffer up
@@ -555,8 +555,8 @@ int evbuffer_add_reference_with_offset(struct evbuffer *outbuf, const void *data
   flag is set, it uses those functions.  Otherwise, it tries to use
   mmap (or CreateFileMapping on Windows).
 
-  The function owns the resulting file descriptor and will close it
-  when finished transferring data.
+  The function owns the resulting file descriptor and will close (even in case
+  of error) it when finished transferring data.
 
   The results of using evbuffer_remove() or evbuffer_pullup() on
   evbuffers whose data was added using this function are undefined.

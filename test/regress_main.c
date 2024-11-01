@@ -111,7 +111,7 @@ timeval_msec_diff(const struct timeval *start, const struct timeval *end)
 /* Code to wrap up old legacy test cases that used setup() and cleanup().
  *
  * Not all of the tests designated "legacy" are ones that used setup() and
- * cleanup(), of course.  A test is legacy it it uses setup()/cleanup(), OR
+ * cleanup(), of course.  A test is legacy if it uses setup()/cleanup(), OR
  * if it wants to find its event base/socketpair in global variables (ugh),
  * OR if it wants to communicate success/failure through test_ok.
  */
@@ -249,7 +249,7 @@ void *
 basic_test_setup(const struct testcase_t *testcase)
 {
 	struct event_base *base = NULL;
-	evutil_socket_t spair[2] = { -1, -1 };
+	evutil_socket_t spair[2] = { EVUTIL_INVALID_SOCKET, EVUTIL_INVALID_SOCKET };
 	struct basic_test_data *data = NULL;
 
 #if defined(EVTHREAD_USE_PTHREADS_IMPLEMENTED)
@@ -258,7 +258,15 @@ basic_test_setup(const struct testcase_t *testcase)
 		evthread_flags |= EVTHREAD_PTHREAD_PRIO_INHERIT;
 #endif
 
+#ifdef _WIN32
+	DWORD tid;
+	THREAD_T p;
+	tid = THREAD_SELF();
+	p = (THREAD_T)&tid;
+	thread_setup(p);
+#else
 	thread_setup(THREAD_SELF());
+#endif
 
 #ifndef _WIN32
 	if (testcase->flags & TT_ENABLE_IOCP_FLAG)
@@ -286,18 +294,8 @@ basic_test_setup(const struct testcase_t *testcase)
 	}
 
 	if (testcase->flags & TT_NEED_SOCKETPAIR) {
-		if (evutil_socketpair(AF_UNIX, SOCK_STREAM, 0, spair) == -1) {
+		if (evutil_socketpair(AF_UNIX, SOCK_STREAM|EVUTIL_SOCK_NONBLOCK, 0, spair) == -1) {
 			fprintf(stderr, "%s: socketpair\n", __func__);
-			exit(1);
-		}
-
-		if (evutil_make_socket_nonblocking(spair[0]) == -1) {
-			fprintf(stderr, "fcntl(O_NONBLOCK)");
-			exit(1);
-		}
-
-		if (evutil_make_socket_nonblocking(spair[1]) == -1) {
-			fprintf(stderr, "fcntl(O_NONBLOCK)");
 			exit(1);
 		}
 	}
@@ -543,6 +541,10 @@ main(int argc, const char **argv)
 		return 1;
 
 	libevent_global_shutdown();
+
+#ifdef _WIN32
+	WSACleanup();
+#endif
 
 	return 0;
 }

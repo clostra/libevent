@@ -218,7 +218,7 @@ int event_debug_mode_on_ = 0;
  *        to be shared across threads (if thread support is enabled).
  *
  *        When and if evthreads are initialized, this variable will be evaluated,
- *        and if set to something other than zero, this means the evthread setup 
+ *        and if set to something other than zero, this means the evthread setup
  *        functions were called out of order.
  *
  *        See: "Locks and threading" in the documentation.
@@ -1387,7 +1387,8 @@ event_signal_closure(struct event_base *base, struct event *ev)
 	short ncalls;
 	int should_break;
 
-	/* Allows deletes to work */
+	/* Allows deletes to work, see also event_del_nolock_() that has
+	 * special treatment for signals */
 	ncalls = ev->ev_ncalls;
 	if (ncalls != 0)
 		ev->ev_pncalls = &ncalls;
@@ -1504,12 +1505,17 @@ common_timeout_callback(evutil_socket_t fd, short what, void *arg)
 	EVBASE_ACQUIRE_LOCK(base, th_base_lock);
 	gettime(base, &now);
 	while (1) {
+		int was_active;
 		ev = TAILQ_FIRST(&ctl->events);
 		if (!ev || ev->ev_timeout.tv_sec > now.tv_sec ||
 		    (ev->ev_timeout.tv_sec == now.tv_sec &&
 			(ev->ev_timeout.tv_usec&MICROSECONDS_MASK) > now.tv_usec))
 			break;
-		event_del_nolock_(ev, EVENT_DEL_NOBLOCK);
+		was_active = ev->ev_flags & (EVLIST_ACTIVE|EVLIST_ACTIVE_LATER);
+		if (!was_active)
+			event_del_nolock_(ev, EVENT_DEL_NOBLOCK);
+		else
+			event_queue_remove_timeout(base, ev);
 		event_active_nolock_(ev, EV_TIMEOUT, 1);
 	}
 	if (ev)
@@ -1677,7 +1683,7 @@ event_process_active_single_queue(struct event_base *base,
 	EVUTIL_ASSERT(activeq != NULL);
 
 	for (evcb = TAILQ_FIRST(activeq); evcb; evcb = TAILQ_FIRST(activeq)) {
-		struct event *ev=NULL;
+		struct event *ev = NULL;
 		if (evcb->evcb_flags & EVLIST_INIT) {
 			ev = event_callback_to_event(evcb);
 
@@ -1698,6 +1704,9 @@ event_process_active_single_queue(struct event_base *base,
 				"closure %d, call %p",
 				(void *)evcb, evcb->evcb_closure, (void *)evcb->evcb_cb_union.evcb_callback));
 		}
+		// We don't want an infinite loop or use of memory after it is freed.
+		// Hence, for next loop iteration, it is expected that `event_queue_remove_active` or `event_del_nolock_` have removed current event from the queue at this point.
+		EVUTIL_ASSERT(evcb != TAILQ_FIRST(activeq));
 
 		if (!(evcb->evcb_flags & EVLIST_INTERNAL))
 			++count;
@@ -2152,21 +2161,20 @@ event_base_once(struct event_base *base, evutil_socket_t fd, short events,
 		return (-1);
 	}
 
-	if (res == 0) {
-		EVBASE_ACQUIRE_LOCK(base, th_base_lock);
-		if (activate)
-			event_active_nolock_(&eonce->ev, EV_TIMEOUT, 1);
-		else
-			res = event_add_nolock_(&eonce->ev, tv, 0);
 
-		if (res != 0) {
-			mm_free(eonce);
-			return (res);
-		} else {
-			LIST_INSERT_HEAD(&base->once_events, eonce, next_once);
-		}
-		EVBASE_RELEASE_LOCK(base, th_base_lock);
+	EVBASE_ACQUIRE_LOCK(base, th_base_lock);
+	if (activate)
+		event_active_nolock_(&eonce->ev, EV_TIMEOUT, 1);
+	else
+		res = event_add_nolock_(&eonce->ev, tv, 0);
+
+	if (res != 0) {
+		mm_free(eonce);
+		return (res);
+	} else {
+		LIST_INSERT_HEAD(&base->once_events, eonce, next_once);
 	}
+	EVBASE_RELEASE_LOCK(base, th_base_lock);
 
 	return (0);
 }
@@ -2573,7 +2581,7 @@ static int
 evthread_notify_base_default(struct event_base *base)
 {
 	char buf[1];
-	int r;
+	ev_ssize_t r;
 	buf[0] = (char) 0;
 #ifdef _WIN32
 	r = send(base->th_notify_fd[1], buf, 1, 0);
@@ -2589,13 +2597,29 @@ evthread_notify_base_default(struct event_base *base)
 static int
 evthread_notify_base_eventfd(struct event_base *base)
 {
-	ev_uint64_t msg = 1;
-	int r;
-	do {
-		r = write(base->th_notify_fd[0], (void*) &msg, sizeof(msg));
-	} while (r < 0 && errno == EAGAIN);
+	int efd = base->th_notify_fd[0];
+	eventfd_t val;
+	int ret;
+	for (val=1;;val=1) {
+		ret = eventfd_write(efd, val);
+		if (ret < 0) {
+			// When EAGAIN occurs, the eventfd counter hits the maximum value of the unsigned 64-bit.
+			// We need to first drain the eventfd and then write again.
+			//
+			// Check out https://man7.org/linux/man-pages/man2/eventfd.2.html for details.
+			if (errno == EAGAIN) {
+				// It's ready to retry.
+				if (eventfd_read(efd, &val) == 0 || errno == EAGAIN) {
+					continue;
+				}
+			}
+			// Unknown error occurs.
+			ret = -1;
+		}
+		break;
+	}
 
-	return (r < 0) ? -1 : 0;
+	return ret;
 }
 #endif
 
@@ -2907,13 +2931,9 @@ event_del_nolock_(struct event *ev, int blocking)
 	}
 
 	if (ev->ev_flags & EVLIST_TIMEOUT) {
-		/* NOTE: We never need to notify the main thread because of a
-		 * deleted timeout event: all that could happen if we don't is
-		 * that the dispatch loop might wake up too early.  But the
-		 * point of notifying the main thread _is_ to wake up the
-		 * dispatch loop early anyway, so we wouldn't gain anything by
-		 * doing it.
-		 */
+		/* Notify the base if this was the minimal timeout */
+		if (min_heap_top_(&base->timeheap) == ev)
+			notify = 1;
 		event_queue_remove_timeout(base, ev);
 	}
 
@@ -3257,14 +3277,18 @@ timeout_process(struct event_base *base)
 	gettime(base, &now);
 
 	while ((ev = min_heap_top_(&base->timeheap))) {
+		int was_active = ev->ev_flags & (EVLIST_ACTIVE|EVLIST_ACTIVE_LATER);
+
 		if (evutil_timercmp(&ev->ev_timeout, &now, >))
 			break;
 
-		/* delete this event from the I/O queues */
-		event_del_nolock_(ev, EVENT_DEL_NOBLOCK);
+		if (!was_active)
+			event_del_nolock_(ev, EVENT_DEL_NOBLOCK);
+		else
+			event_queue_remove_timeout(base, ev);
 
-		event_debug(("timeout_process: event: %p, call %p",
-			 (void *)ev, (void *)ev->ev_callback));
+		event_debug(("timeout_process: event: %p, call %p (was active: %i)",
+			 (void *)ev, (void *)ev->ev_callback, was_active));
 		event_active_nolock_(ev, EV_TIMEOUT, 1);
 	}
 }
@@ -3648,14 +3672,7 @@ event_set_mem_functions(void *(*malloc_fn)(size_t sz),
 static void
 evthread_notify_drain_eventfd(evutil_socket_t fd, short what, void *arg)
 {
-	ev_uint64_t msg;
-	ev_ssize_t r;
 	struct event_base *base = arg;
-
-	r = read(fd, (void*) &msg, sizeof(msg));
-	if (r<0 && errno != EAGAIN) {
-		event_sock_warn(fd, "Error reading from eventfd");
-	}
 	EVBASE_ACQUIRE_LOCK(base, th_base_lock);
 	base->is_notify_pending = 0;
 	EVBASE_RELEASE_LOCK(base, th_base_lock);
@@ -3733,7 +3750,7 @@ evthread_make_base_notifiable_nolock_(struct event_base *base)
 
 	/* prepare an event that we can use for wakeup */
 	event_assign(&base->th_notify, base, base->th_notify_fd[0],
-				 EV_READ|EV_PERSIST, cb, base);
+				 EV_READ|EV_PERSIST|EV_ET, cb, base);
 
 	/* we need to mark this as internal event */
 	base->th_notify.ev_flags |= EVLIST_INTERNAL;

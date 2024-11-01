@@ -19,7 +19,7 @@
 #       start libevent.sln
 #
 
-cmake_minimum_required(VERSION 3.4 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.5 FATAL_ERROR)
 
 if (POLICY CMP0042)
     cmake_policy(SET CMP0042 NEW) # MACOSX_RPATH is enabled by default.
@@ -72,6 +72,7 @@ include(CheckPrototypeDefinition)
 include(CheckFunctionKeywords)
 include(CheckConstExists)
 include(AddCompilerFlags)
+include(AddLinkerFlags)
 include(VersionViaGit)
 
 event_fuzzy_version_from_git()
@@ -212,6 +213,8 @@ Configure_RPATH()
 if (EVENT__ENABLE_VERBOSE_DEBUG)
     add_definitions(-DUSE_DEBUG=1)
 endif()
+
+add_linker_flags(-Wl,-z,max-page-size=16384)
 
 # make it colorful under ninja-build
 if ("${CMAKE_GENERATOR}" STREQUAL "Ninja")
@@ -466,6 +469,7 @@ else()
         sys/ioctl.h
         sys/mman.h
         sys/queue.h
+        sys/tree.h
         sys/select.h
         sys/sendfile.h
         sys/uio.h
@@ -506,25 +510,24 @@ unset(FILES_TO_CHECK)
 # Check if functions exist
 list(APPEND SYMBOLS_TO_CHECK
     getaddrinfo
+    gethostbyname
     getnameinfo
     getprotobynumber
     getservbyname
-    gethostbyname
+    gettimeofday
     inet_ntop
     inet_pton
-    gettimeofday
+    nanosleep
+    putenv
     signal
     socketpair
-    strtoll
     strlcpy
     strsep
     strtok_r
-    timerclear
-    timercmp
-    timerisset
+    strtoll
     timeradd
-    nanosleep
-    putenv
+    timerclear
+    timerisset
     umask
 )
 if (NOT EVENT__DISABLE_CLOCK_GETTIME)
@@ -533,45 +536,45 @@ endif()
 
 if (WIN32)
     list(APPEND SYMBOLS_TO_CHECK
-        _gmtime64_s
         _gmtime64
+        _gmtime64_s
     )
 else()
     list(APPEND SYMBOLS_TO_CHECK
-        getifaddrs
-        select
-        epoll_create
-        epoll_create1
-        epoll_pwait2
-        epoll_ctl
-        eventfd
-        poll
-        port_create
-        kqueue
-        fcntl
-        mmap
-        pipe
-        pipe2
-        pread
-        sendfile
-        sigaction
-        strsignal
-        sysctl
         accept4
         arc4random
         arc4random_buf
-        arc4random_addrandom
-        getrandom
+        arc4random_stir
+        epoll_create
+        epoll_create1
+        epoll_ctl
+        epoll_pwait2
+        eventfd
+        fcntl
         getegid
         geteuid
-        issetugid
-        usleep
-        timerfd_create
-        setenv
-        unsetenv
-        setrlimit
         gethostbyname_r
+        getifaddrs
+        getrandom
+        issetugid
+        kqueue
+        mmap
         mmap64
+        pipe
+        pipe2
+        poll
+        port_create
+        pread
+        select
+        sendfile
+        setenv
+        setrlimit
+        sigaction
+        strsignal
+        sysctl
+        timerfd_create
+        unsetenv
+        usleep
     )
     if (APPLE)
         list(APPEND SYMBOLS_TO_CHECK mach_absolute_time)
@@ -676,7 +679,6 @@ endif()
 CHECK_SYMBOL_EXISTS("__func__"     "" EVENT__HAVE___func__)
 CHECK_SYMBOL_EXISTS("__FUNCTION__" "" EVENT__HAVE___FUNCTION__)
 
-CHECK_SYMBOL_EXISTS(TAILQ_FOREACH sys/queue.h EVENT__HAVE_TAILQFOREACH)
 CHECK_CONST_EXISTS(CTL_KERN sys/sysctl.h EVENT__HAVE_DECL_CTL_KERN)
 CHECK_CONST_EXISTS(KERN_ARND sys/sysctl.h EVENT__HAVE_DECL_KERN_ARND)
 CHECK_SYMBOL_EXISTS(F_SETFD fcntl.h EVENT__HAVE_SETFD)
@@ -685,10 +687,7 @@ CHECK_TYPE_SIZE(fd_mask EVENT__HAVE_FD_MASK)
 
 CHECK_TYPE_SIZE(size_t EVENT__SIZEOF_SIZE_T)
 if(NOT EVENT__SIZEOF_SIZE_T)
-  set(EVENT__size_t "unsigned")
   set(EVENT__SIZEOF_SIZE_T ${EVENT__SIZEOF_UNSIGNED})
-else()
-    set(EVENT__size_t size_t)
 endif()
 
 CHECK_TYPE_SIZE("off_t" EVENT__SIZEOF_OFF_T LANGUAGE C)
@@ -705,13 +704,10 @@ CHECK_TYPE_SIZE("SSIZE_T" EVENT__SIZEOF_SSIZE_T_UPPER LANGUAGE C)
 
 if (EVENT__SIZEOF_SSIZE_T_LOWER)
     set(EVENT__ssize_t "ssize_t")
-    set(EVENT__SIZEOF_SSIZE_T ${EVENT__SIZEOF_SSIZE_T_LOWER})
 elseif (EVENT__SIZEOF_SSIZE_T_UPPER)
     set(EVENT__ssize_t "SSIZE_T")
-    set(EVENT__SIZEOF_SSIZE_T ${EVENT__SIZEOF_SSIZE_T_UPPER})
 else()
     set(EVENT__ssize_t "int")
-    set(EVENT__SIZEOF_SSIZE_T ${EVENT__SIZEOF_INT})
 endif()
 
 CHECK_TYPE_SIZE(socklen_t EVENT__SIZEOF_SOCKLEN_T)
@@ -727,10 +723,6 @@ if(NOT EVENT__SIZEOF_PID_T)
   set(EVENT__SIZEOF_PID_T ${EVENT__SIZEOF_INT})
 else()
 	set(EVENT__SIZEOF_PID_T EVENT__SIZEOF_PID_T)
-endif()
-
-if(EVENT__HAVE_CLOCK_GETTIME)
-  set(EVENT__DNS_USE_CPU_CLOCK_FOR_ID 1)
 endif()
 
 # we're just getting lazy now.
@@ -800,15 +792,6 @@ else()
 endif()
 
 CHECK_TYPE_SIZE("struct in6_addr" EVENT__HAVE_STRUCT_IN6_ADDR)
-if(EVENT__HAVE_STRUCT_IN6_ADDR)
-    CHECK_STRUCT_HAS_MEMBER("struct in6_addr"
-            s6_addr16 "${SOCKADDR_HEADERS}"
-            EVENT__HAVE_STRUCT_IN6_ADDR_S6_ADDR16)
-
-    CHECK_STRUCT_HAS_MEMBER("struct in6_addr"
-            s6_addr32 "${SOCKADDR_HEADERS}"
-            EVENT__HAVE_STRUCT_IN6_ADDR_S6_ADDR32)
-endif()
 
 CHECK_TYPE_SIZE("sa_family_t" EVENT__HAVE_SA_FAMILY_T)
 CHECK_TYPE_SIZE("struct sockaddr_in6" EVENT__HAVE_STRUCT_SOCKADDR_IN6)
@@ -860,7 +843,8 @@ set(HDR_PRIVATE
     openssl-compat.h
     evconfig-private.h
     sha1.h
-    compat/sys/queue.h)
+    compat/sys/queue.h
+    compat/sys/tree.h)
 
 set(HDR_COMPAT
     include/evdns.h
@@ -1069,8 +1053,7 @@ if(WIN32)
 
     list(APPEND HDR_PRIVATE WIN32-Code/getopt.h)
 
-    set(EVENT__DNS_USE_FTIME_FOR_ID 1)
-    set(LIB_PLATFORM ws2_32 shell32 advapi32 bcrypt)
+    set(LIB_PLATFORM ws2_32 shell32 advapi32 bcrypt iphlpapi)
     add_definitions(
             -D_CRT_SECURE_NO_WARNINGS
             -D_CRT_NONSTDC_NO_DEPRECATE)
@@ -1121,9 +1104,6 @@ if (EVENT__HAVE_OPENSSL)
         INNER_LIBRARIES event_core
         LIBRARIES ${OPENSSL_TARGETS}
         SOURCES ${SRC_OPENSSL})
-    set(LIBEVENT_OPENSSL_DEPENDENCY "find_dependency(OpenSSL)")
-else ()
-    set(LIBEVENT_OPENSSL_DEPENDENCY "")
 endif()
 
 if (EVENT__HAVE_MBEDTLS)
@@ -1131,17 +1111,20 @@ if (EVENT__HAVE_MBEDTLS)
         INNER_LIBRARIES event_core
         LIBRARIES ${MBEDTLS_TARGETS}
         SOURCES ${SRC_MBEDTLS})
-    set(LIBEVENT_MBEDTLS_DEPENDENCY "find_dependency(MbedTLS)")
-else ()
-    set(LIBEVENT_MBEDTLS_DEPENDENCY "")
 endif()
 
 if (EVENT__HAVE_PTHREADS)
     set(SRC_PTHREADS evthread_pthread.c)
-    add_event_library(event_pthreads
-        INNER_LIBRARIES event_core
-        LIBRARIES Threads::Threads
-        SOURCES ${SRC_PTHREADS})
+    if(ANDROID)
+        add_event_library(event_pthreads
+            INNER_LIBRARIES event_core
+            SOURCES ${SRC_PTHREADS})
+    else()
+        add_event_library(event_pthreads
+            INNER_LIBRARIES event_core
+            LIBRARIES Threads::Threads
+            SOURCES ${SRC_PTHREADS})
+    endif()
 endif()
 
 # library exists for historical reasons; it contains the contents of
@@ -1263,6 +1246,7 @@ macro(add_test_prog prog)
                           event_extra
                           ${ARGN})
 endmacro()
+
 if (NOT EVENT__DISABLE_TESTS)
     #
     # Generate Regress tests.
@@ -1402,6 +1386,12 @@ if (NOT EVENT__DISABLE_TESTS)
         test-dumpevents
         test-ratelim
     )
+
+    if(PTHREADS_AVAILABLE AND EVENT__HAVE_KQUEUE)
+        add_test_prog(test-kq-collision event_pthreads)
+        list(APPEND ALL_TESTPROGS test-kq-collision)
+        add_test(test-test-kq-collision ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/test-kq-collision)
+    endif()
 
     #
     # We run all tests with the different backends turned on one at a time.
@@ -1764,6 +1754,8 @@ message(STATUS "CMAKE_VERBOSE_MAKEFILE:   ${CMAKE_VERBOSE_MAKEFILE}")
 message(STATUS "CMAKE_C_FLAGS:            ${CMAKE_C_FLAGS}")
 message(STATUS "CMAKE_BUILD_TYPE:         ${CMAKE_BUILD_TYPE}")
 message(STATUS "CMAKE_C_COMPILER:         ${CMAKE_C_COMPILER} (id ${CMAKE_C_COMPILER_ID}, clang ${CLANG}, GNUC ${GNUC}, version ${CMAKE_C_COMPILER_VERSION})")
+message(STATUS "CMAKE_SHARED_LINKER_FLAGS:${CMAKE_SHARED_LINKER_FLAGS}")
+message(STATUS "CMAKE_EXE_LINKER_FLAGS:   ${CMAKE_EXE_LINKER_FLAGS}")
 message(STATUS "CMAKE_AR:                 ${CMAKE_AR}")
 message(STATUS "CMAKE_RANLIB:             ${CMAKE_RANLIB}")
 message(STATUS "CMAKE_INSTALL_PREFIX:     ${CMAKE_INSTALL_PREFIX}")
